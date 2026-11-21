@@ -21,8 +21,14 @@ const ALWAYS_IGNORED_DIRS = new Set<string>([
   '.git',
   'dist',
   'dist-test',
+  'dist-tests',
   'build',
+  'out',
   'coverage',
+  '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.turbo',
 ]);
 
 const TEST_DIR_NAMES = new Set<string>(['test', 'tests', '__tests__']);

@@ -150,6 +150,41 @@ describe('pathGuard security invariants & file discovery', () => {
     }
   });
 
+  it('ignores compiled framework and test artifact directories including dist-tests/, out/, .next/, .nuxt/, .svelte-kit/, and .turbo/', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdg-compiled-dirs-'));
+    try {
+      const layout: Record<string, string> = {
+        'src/mcp.ts': 'export const mcp = 1;\n',
+        'dist-tests/src/mcp.js': 'export const mcp = 1;\n',
+        'dist-test/src/mcp.js': 'export const mcp = 1;\n',
+        'out/server.js': 'export const outSrv = 1;\n',
+        '.next/server/app.js': 'export const nextSrv = 1;\n',
+        '.nuxt/dist/server.mjs': 'export const nuxtSrv = 1;\n',
+        '.svelte-kit/output/server/index.js': 'export const svelteSrv = 1;\n',
+        '.turbo/cache/index.js': 'export const turboCache = 1;\n',
+      };
+      for (const [rel, body] of Object.entries(layout)) {
+        const full = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, body, 'utf8');
+      }
+
+      const defaultWalk = discoverProjectFiles(dir, { includeTests: false });
+      assert.deepEqual(
+        defaultWalk.files.map((f) => f.displayPath),
+        ['src/mcp.ts']
+      );
+
+      const includeTestsWalk = discoverProjectFiles(dir, { includeTests: true });
+      assert.deepEqual(
+        includeTestsWalk.files.map((f) => f.displayPath),
+        ['src/mcp.ts']
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('enforces zero os.homedir and zero shell:true across src/', () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
     const srcDir = path.join(repoRoot, 'src');
