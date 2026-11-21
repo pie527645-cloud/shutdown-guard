@@ -1,0 +1,46 @@
+{
+  "name": "@pie527645-cloud/shutdown-guard",
+  "version": "1.0.0",
+  "description": "Static TypeScript/JavaScript AST verifier for HTTP graceful shutdown signal handlers, drain paths, and keep-alive timeout ordering.",
+  "type": "module",
+  "license": "MIT",
+  "author": "pie527645-cloud",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pie527645-cloud/shutdown-guard.git"
+  },
+  "homepage": "https://github.com/pie527645-cloud/shutdown-guard#readme",
+  "bugs": {
+    "url": "https://github.com/pie527645-cloud/shutdown-guard/issues"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "bin": {
+    "shutdown-guard": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "lint": "tsc -p tsconfig.test.json --noEmit",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.test.json && node scripts/normalize-lf.mjs",
+    "test": "node --test dist-test/test/rules.test.js dist-test/test/golden.test.js dist-test/test/formatters.test.js dist-test/test/pathGuard.test.js dist-test/test/cli.test.js"
+  },
+  "dependencies": {
+    "typescript": "^5.6.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.19"
+  }
+}
