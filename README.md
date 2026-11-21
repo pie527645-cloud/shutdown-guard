@@ -50,8 +50,8 @@ shutdown-guard check [target] [options]
 | --- | --- | --- |
 | `SDG001` | `medium` | An `http`, `https`, `express`, or `fastify` server calls `.listen(...)` with no `process.on` / `once` / `addListener` handler for `SIGTERM` or `SIGINT` anywhere in the scanned project. |
 | `SDG002` | `high` | `headersTimeout <= keepAliveTimeout` on the same server (when both resolve to numeric literals or local numeric `const` expressions). Node.js requires `headersTimeout > keepAliveTimeout` so idle keep-alive sockets are not reset mid-header. |
-| `SDG003` | `info` (default) / `medium` (with `--lb-idle-timeout <sec>`) | Server calls `.listen(...)` with `keepAliveTimeout` unset (`info` by default; `medium` when `--lb-idle-timeout` is passed), or static `keepAliveTimeout <= sec * 1000` (`medium`). Dynamic external values (e.g. environment variables) are left unflagged. |
-| `SDG004` | `medium` | A `SIGTERM` or `SIGINT` handler invokes `process.exit(...)` synchronously before any awaited or callback `.close(...)` finishes draining active requests. |
+| `SDG003` | `info` (default) / `medium` (with `--lb-idle-timeout <sec>`) | Server calls `.listen(...)` with `keepAliveTimeout` unset (`http`, `https`, and `express` default to `5000ms` in Node.js: `info` by default, or `medium` when `5000 <= sec * 1000`; `fastify` defaults to `72000ms`: unflagged by default, `medium` only when `72000 <= sec * 1000`), or static `keepAliveTimeout <= sec * 1000` (`medium` for any framework). Dynamic external values (e.g. environment variables) are left unflagged. |
+| `SDG004` | `medium` | A `SIGTERM` or `SIGINT` handler invokes `process.exit(...)` synchronously before any awaited or callback `.close(...)` (including `promisify(server.close.bind(server))()`) finishes draining active requests. |
 | `SDG005` | `low` | A `SIGTERM` or `SIGINT` handler calls `.close(...)` without scheduling a forced-exit fallback timer (`setTimeout` calling `process.exit` or `process.abort`, with or without `.unref()`). |
 
 ## Recommended Production Pattern

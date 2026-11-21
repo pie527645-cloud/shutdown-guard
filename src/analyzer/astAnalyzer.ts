@@ -83,6 +83,7 @@ const HTTPS_SPECIFIERS = new Set<string>(['https', 'node:https']);
 const PROCESS_SPECIFIERS = new Set<string>(['process', 'node:process']);
 const TIMERS_SPECIFIERS = new Set<string>(['timers', 'node:timers']);
 const MODULE_SPECIFIERS = new Set<string>(['module', 'node:module']);
+const UTIL_SPECIFIERS = new Set<string>(['util', 'node:util']);
 
 const CANDIDATE_RELATIVE_EXTENSIONS = [
   '',
@@ -1107,6 +1108,160 @@ export function analyzeSources(
     return ts.isPropertyAccessExpression(callee) && callee.name.text === 'close';
   }
 
+  function resolveConstInit(
+    fromFile: ParsedFileRecord,
+    identNode: ts.Identifier
+  ): { readonly file: ParsedFileRecord; readonly expr: ts.Expression } | undefined {
+    const localInit = findConstInitializerInScope(identNode.text, identNode);
+    if (localInit !== undefined) {
+      return { file: fromFile, expr: localInit };
+    }
+    const binding = fromFile.imports.get(identNode.text);
+    if (!binding) {
+      return undefined;
+    }
+    const targetFile = resolveRelativeFile(fromFile, binding.moduleSpecifier);
+    if (!targetFile) {
+      return undefined;
+    }
+    const exportedInit = targetFile.exportedConsts.get(binding.importedName);
+    if (exportedInit === undefined) {
+      return undefined;
+    }
+    return { file: targetFile, expr: exportedInit };
+  }
+
+  function isPromisifyCall(file: ParsedFileRecord, node: ts.CallExpression): boolean {
+    const callee = unwrapExpression(node.expression);
+    if (ts.isIdentifier(callee)) {
+      const imp = file.imports.get(callee.text);
+      if (imp) {
+        return UTIL_SPECIFIERS.has(imp.moduleSpecifier) && imp.importedName === 'promisify';
+      }
+      return callee.text === 'promisify';
+    }
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'promisify') {
+      const recv = unwrapExpression(callee.expression);
+      if (ts.isIdentifier(recv)) {
+        const imp = file.imports.get(recv.text);
+        if (imp) {
+          return (
+            UTIL_SPECIFIERS.has(imp.moduleSpecifier) &&
+            (imp.importedName === 'default' || imp.importedName === '*')
+          );
+        }
+        return recv.text === 'util';
+      }
+      if (isInlineRequireOf(file, recv, (s) => UTIL_SPECIFIERS.has(s))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isCloseMethodRef(
+    file: ParsedFileRecord,
+    expr: ts.Expression,
+    visitedConsts: Set<string> = new Set()
+  ): boolean {
+    const node = unwrapExpression(expr);
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'close') {
+      return true;
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'bind') {
+        return isCloseMethodRef(file, callee.expression, visitedConsts);
+      }
+    }
+    if (ts.isIdentifier(node)) {
+      const key = `${file.absolutePath}::${node.text}`;
+      if (visitedConsts.has(key)) {
+        return false;
+      }
+      const resolved = resolveConstInit(file, node);
+      if (resolved !== undefined) {
+        const nextVisited = new Set(visitedConsts);
+        nextVisited.add(key);
+        return isCloseMethodRef(resolved.file, resolved.expr, nextVisited);
+      }
+    }
+    return false;
+  }
+
+  function isBoundCloseFn(
+    file: ParsedFileRecord,
+    expr: ts.Expression,
+    visitedConsts: Set<string> = new Set()
+  ): boolean {
+    const node = unwrapExpression(expr);
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'bind') {
+        return isCloseMethodRef(file, callee.expression, visitedConsts);
+      }
+    }
+    if (ts.isIdentifier(node)) {
+      const key = `${file.absolutePath}::${node.text}`;
+      if (visitedConsts.has(key)) {
+        return false;
+      }
+      const resolved = resolveConstInit(file, node);
+      if (resolved !== undefined) {
+        const nextVisited = new Set(visitedConsts);
+        nextVisited.add(key);
+        return isBoundCloseFn(resolved.file, resolved.expr, nextVisited);
+      }
+    }
+    return false;
+  }
+
+  function isPromisifiedCloseFn(
+    file: ParsedFileRecord,
+    expr: ts.Expression,
+    visitedConsts: Set<string> = new Set()
+  ): boolean {
+    const node = unwrapExpression(expr);
+    if (ts.isCallExpression(node)) {
+      if (isPromisifyCall(file, node) && node.arguments.length >= 1) {
+        return isCloseMethodRef(file, node.arguments[0]!, visitedConsts);
+      }
+      const callee = unwrapExpression(node.expression);
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'bind') {
+        return isPromisifiedCloseFn(file, callee.expression, visitedConsts);
+      }
+    }
+    if (ts.isIdentifier(node)) {
+      const key = `${file.absolutePath}::${node.text}`;
+      if (visitedConsts.has(key)) {
+        return false;
+      }
+      const resolved = resolveConstInit(file, node);
+      if (resolved !== undefined) {
+        const nextVisited = new Set(visitedConsts);
+        nextVisited.add(key);
+        return isPromisifiedCloseFn(resolved.file, resolved.expr, nextVisited);
+      }
+    }
+    return false;
+  }
+
+  function isBoundCloseCall(file: ParsedFileRecord, node: ts.CallExpression): boolean {
+    return isBoundCloseFn(file, node.expression);
+  }
+
+  function isPromisifiedCloseCall(file: ParsedFileRecord, node: ts.CallExpression): boolean {
+    return isPromisifiedCloseFn(file, node.expression);
+  }
+
+  function isRecognizedCloseCall(file: ParsedFileRecord, node: ts.CallExpression): boolean {
+    return (
+      isCloseCall(node) ||
+      isBoundCloseCall(file, node) ||
+      isPromisifiedCloseCall(file, node)
+    );
+  }
+
   function expressionContainsClose(
     file: ParsedFileRecord,
     expr: ts.Expression,
@@ -1120,7 +1275,7 @@ export function analyzeSources(
         return;
       }
       if (ts.isCallExpression(n)) {
-        if (isCloseCall(n)) {
+        if (isRecognizedCloseCall(file, n)) {
           found = true;
           return;
         }
@@ -1132,17 +1287,16 @@ export function analyzeSources(
             return;
           }
         }
-      } else if (ts.isIdentifier(n) && !visitedIdents.has(n.text)) {
-        const init = findConstInitializerInScope(
-          n.text,
-          n,
-          makeExportedConstResolver(file)
-        );
-        if (init) {
-          visitedIdents.add(n.text);
-          if (expressionContainsClose(file, init, visitedFns, visitedIdents)) {
-            found = true;
-            return;
+      } else if (ts.isIdentifier(n)) {
+        const identKey = `${file.absolutePath}::${n.text}`;
+        if (!visitedIdents.has(identKey)) {
+          const resolved = resolveConstInit(file, n);
+          if (resolved !== undefined) {
+            visitedIdents.add(identKey);
+            if (expressionContainsClose(resolved.file, resolved.expr, visitedFns, visitedIdents)) {
+              found = true;
+              return;
+            }
           }
         }
       }
@@ -1173,7 +1327,7 @@ export function analyzeSources(
         }
       }
       if (ts.isCallExpression(n)) {
-        if (isCloseCall(n)) {
+        if (isRecognizedCloseCall(fnRec.file, n)) {
           found = true;
           return;
         }
@@ -1276,11 +1430,12 @@ export function analyzeSources(
     }
   }
 
-  // Rule SDG003: keepAliveTimeout unset (info default; medium with --lb-idle-timeout) or <= lbIdleTimeout * 1000
+  // Rule SDG003: keepAliveTimeout unset (Node 5000ms vs Fastify 72000ms default) or <= lbIdleTimeout * 1000
   const lbIdleSec = options.lbIdleTimeoutSec;
   for (const srv of listeningServers) {
+    const defaultKeepAliveMs = srv.framework === 'fastify' ? 72_000 : 5_000;
     if (lbIdleSec === undefined) {
-      if (srv.keepAliveTimeout.state === 'unset') {
+      if (srv.keepAliveTimeout.state === 'unset' && srv.framework !== 'fastify') {
         const primarySite = srv.listenSites[0]!;
         rawFindings.push(
           nodeToFinding(
@@ -1295,16 +1450,20 @@ export function analyzeSources(
     } else {
       const lbIdleMs = lbIdleSec * 1000;
       if (srv.keepAliveTimeout.state === 'unset') {
-        const primarySite = srv.listenSites[0]!;
-        rawFindings.push(
-          nodeToFinding(
-            'SDG003',
-            'medium',
-            `Server keepAliveTimeout is unset (5000ms default), which is <= load balancer idle timeout (${lbIdleMs}ms / ${lbIdleSec}s).`,
-            primarySite.file,
-            primarySite.node
-          )
-        );
+        if (defaultKeepAliveMs <= lbIdleMs) {
+          const primarySite = srv.listenSites[0]!;
+          const defaultDesc =
+            srv.framework === 'fastify' ? '72000ms Fastify default' : '5000ms default';
+          rawFindings.push(
+            nodeToFinding(
+              'SDG003',
+              'medium',
+              `Server keepAliveTimeout is unset (${defaultDesc}), which is <= load balancer idle timeout (${lbIdleMs}ms / ${lbIdleSec}s).`,
+              primarySite.file,
+              primarySite.node
+            )
+          );
+        }
       } else if (
         srv.keepAliveTimeout.state === 'numeric' &&
         srv.keepAliveTimeout.value <= lbIdleMs
@@ -1368,7 +1527,7 @@ export function analyzeSources(
         }
 
         // 2. .close(callback): callback executes AFTER close completes
-        if (isCloseCall(expr)) {
+        if (isCloseCall(expr) || isBoundCloseCall(file, expr)) {
           walkExpr(expr.expression, state);
           for (const arg of expr.arguments) {
             const cbTarget = resolveFunctionReference(file, arg);
@@ -1562,7 +1721,7 @@ export function analyzeSources(
           return;
         }
         if (ts.isCallExpression(n)) {
-          if (isCloseCall(n) && firstCloseSite === null) {
+          if (isRecognizedCloseCall(current.file, n) && firstCloseSite === null) {
             firstCloseSite = { file: current.file, node: n };
           }
           if (isSetTimeoutCall(current.file, n) && n.arguments.length >= 1) {

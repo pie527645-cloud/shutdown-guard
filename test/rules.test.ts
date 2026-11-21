@@ -280,6 +280,50 @@ describe('Rule SDG003 - keepAliveTimeout unset or <= lb-idle-timeout', () => {
     );
     assert.equal(findings.length, 0);
   });
+
+  it('respects Fastify 72000ms default keepAliveTimeout (clean by default & at lb 60s; medium when explicit <= lb or lb >= 72s)', () => {
+    const fastifyDefaultSrc = singleSource(`
+      import Fastify from 'fastify';
+      const app = Fastify();
+      await app.listen({ port: 3000 });
+      process.on('SIGTERM', async () => {
+        setTimeout(() => process.exit(1), 10_000).unref();
+        await app.close();
+        process.exit(0);
+      });
+    `);
+
+    const defaultFindings = analyzeSources(fastifyDefaultSrc);
+    assert.equal(defaultFindings.filter((f) => f.ruleId === 'SDG003').length, 0);
+    assert.equal(defaultFindings.length, 0);
+
+    const lb60Findings = analyzeSources(fastifyDefaultSrc, { lbIdleTimeoutSec: 60 });
+    assert.equal(lb60Findings.filter((f) => f.ruleId === 'SDG003').length, 0);
+    assert.equal(lb60Findings.length, 0);
+
+    const lb72Findings = analyzeSources(fastifyDefaultSrc, { lbIdleTimeoutSec: 72 });
+    assert.equal(lb72Findings.length, 1);
+    assert.equal(lb72Findings[0]?.ruleId, 'SDG003');
+    assert.equal(lb72Findings[0]?.severity, 'medium');
+    assert.ok(lb72Findings[0]?.message.includes('72000ms'));
+
+    const explicitLowFastifyFindings = analyzeSources(
+      singleSource(`
+        import Fastify from 'fastify';
+        const app = Fastify({ keepAliveTimeout: 5000 });
+        await app.listen({ port: 3000 });
+        process.on('SIGTERM', async () => {
+          setTimeout(() => process.exit(1), 10_000).unref();
+          await app.close();
+          process.exit(0);
+        });
+      `),
+      { lbIdleTimeoutSec: 60 }
+    );
+    assert.equal(explicitLowFastifyFindings.length, 1);
+    assert.equal(explicitLowFastifyFindings[0]?.ruleId, 'SDG003');
+    assert.equal(explicitLowFastifyFindings[0]?.severity, 'medium');
+  });
 });
 
 describe('Rule SDG004 - Synchronous process.exit() before .close()', () => {
@@ -364,6 +408,86 @@ describe('Rule SDG004 - Synchronous process.exit() before .close()', () => {
       `)
     );
     assert.equal(awaitClean.length, 0);
+  });
+
+  it('stays clean on inline promisify(server.close.bind(server))() and const closeAsync = util.promisify(...) (0 SDG004 and 0 SDG005)', () => {
+    const inlinePromisifyFindings = analyzeSources(
+      singleSource(`
+        import http from 'node:http';
+        import { promisify } from 'node:util';
+        const server = http.createServer();
+        server.keepAliveTimeout = 65_000;
+        server.headersTimeout = 66_000;
+        server.listen(3000);
+        process.on('SIGINT', async () => {
+          const t = setTimeout(() => process.exit(1), 5000); t.unref();
+          await promisify(server.close.bind(server))();
+          process.exit(0);
+        });
+      `)
+    );
+    assert.equal(inlinePromisifyFindings.filter((f) => f.ruleId === 'SDG004').length, 0);
+    assert.equal(inlinePromisifyFindings.filter((f) => f.ruleId === 'SDG005').length, 0);
+    assert.equal(inlinePromisifyFindings.length, 0);
+
+    const constPromisifyFindings = analyzeSources(
+      singleSource(`
+        import http from 'node:http';
+        import { promisify } from 'node:util';
+        const server = http.createServer();
+        server.keepAliveTimeout = 65_000;
+        server.headersTimeout = 66_000;
+        server.listen(3000);
+        process.on('SIGTERM', async () => {
+          const t = setTimeout(() => process.exit(1), 5000); t.unref();
+          const closeAsync = promisify(server.close.bind(server));
+          await closeAsync();
+          process.exit(0);
+        });
+      `)
+    );
+    assert.equal(constPromisifyFindings.filter((f) => f.ruleId === 'SDG004').length, 0);
+    assert.equal(constPromisifyFindings.filter((f) => f.ruleId === 'SDG005').length, 0);
+    assert.equal(constPromisifyFindings.length, 0);
+
+    const utilPromisifyConstFindings = analyzeSources(
+      singleSource(`
+        import http from 'node:http';
+        import util from 'node:util';
+        const server = http.createServer();
+        server.keepAliveTimeout = 65_000;
+        server.headersTimeout = 66_000;
+        server.listen(3000);
+        const closeAsync = util.promisify(server.close.bind(server));
+        process.on('SIGINT', async () => {
+          const t = setTimeout(() => process.exit(1), 5000); t.unref();
+          await closeAsync();
+          process.exit(0);
+        });
+      `)
+    );
+    assert.equal(utilPromisifyConstFindings.filter((f) => f.ruleId === 'SDG004').length, 0);
+    assert.equal(utilPromisifyConstFindings.filter((f) => f.ruleId === 'SDG005').length, 0);
+    assert.equal(utilPromisifyConstFindings.length, 0);
+
+    // Unawaited promisified close must still flag SDG004, and promisified close without fallback timer must flag SDG005
+    const unawaitedPromisifyFindings = analyzeSources(
+      singleSource(`
+        import http from 'node:http';
+        import util from 'node:util';
+        const server = http.createServer();
+        server.keepAliveTimeout = 65_000;
+        server.headersTimeout = 66_000;
+        server.listen(3000);
+        const closeAsync = util.promisify(server.close.bind(server));
+        process.on('SIGINT', () => {
+          closeAsync();
+          process.exit(0);
+        });
+      `)
+    );
+    assert.equal(unawaitedPromisifyFindings.some((f) => f.ruleId === 'SDG004'), true);
+    assert.equal(unawaitedPromisifyFindings.some((f) => f.ruleId === 'SDG005'), true);
   });
 });
 

@@ -34,9 +34,9 @@ export const RULES: readonly RuleMetadata[] = [
     defaultSeverity: 'info',
     shortDescription: 'Server keepAliveTimeout is unset or not greater than the load balancer idle timeout.',
     fullDescription:
-      'Node.js defaults keepAliveTimeout to 5000ms when unset. Behind a reverse proxy or load balancer, server keepAliveTimeout must exceed the upstream idle timeout so the upstream closes idle sockets first instead of racing new requests onto closing sockets.',
+      'Node.js http, https, and express servers default keepAliveTimeout to 5000ms when unset, while Fastify defaults keepAliveTimeout to 72000ms (72s). Behind a reverse proxy or load balancer, server keepAliveTimeout must exceed the upstream idle timeout so the upstream closes idle sockets first instead of racing new requests onto closing sockets.',
     helpText:
-      'Explicitly set server.keepAliveTimeout above your upstream load balancer idle timeout (for example 65_000ms behind a 60s load balancer) and set server.headersTimeout higher still.',
+      'Explicitly set keepAliveTimeout above your upstream load balancer idle timeout (for example 65_000ms behind a 60s load balancer, or Fastify({ keepAliveTimeout: 75_000 }) behind a >=72s load balancer) and set headersTimeout higher still.',
   },
   {
     id: 'SDG004',
@@ -46,7 +46,7 @@ export const RULES: readonly RuleMetadata[] = [
     fullDescription:
       'Calling process.exit() synchronously inside a SIGTERM or SIGINT handler terminates the event loop immediately and aborts active HTTP requests before server.close() completes draining.',
     helpText:
-      'Wait for server.close(callback) or await server.close() to finish draining active requests before calling process.exit(0), keeping forced process.exit(1) inside a fallback setTimeout.',
+      'Wait for server.close(callback), await server.close(), or await promisify(server.close.bind(server))() to finish draining active requests before calling process.exit(0), keeping forced process.exit(1) inside a fallback setTimeout.',
   },
   {
     id: 'SDG005',
